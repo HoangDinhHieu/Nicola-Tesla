@@ -1092,3 +1092,28 @@ GO
 <img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/18a5d1bc-4140-4d17-a166-2ddc3fe57c9c" />
 
 *Cùng kết quả nhưng chỉ bằng 1 câu lệnh UPDATE duy nhất — không cần mở CURSOR, không cần FETCH, không cần CLOSE/DEALLOCATE*
+---
+
+### So Sánh Và Nhận Xét Hiệu Năng
+
+<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/01a699ab-9fa3-4909-a3b4-aa17689a84bf" />
+
+*Thời gian thực thi khi dùng CURSOR — CPU time và elapsed time đo được qua SET STATISTICS TIME ON*
+
+<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/194c85a8-3577-4a59-836f-8f1c058b2998" />
+
+*Thời gian thực thi khi dùng Set-based (không dùng CURSOR) — nhanh hơn đáng kể*
+
+| Tiêu chí | CURSOR | SQL Set-based |
+|---|---|---|
+| **Tốc độ** | Chậm hơn, xử lý từng dòng | Nhanh hơn, xử lý đồng loạt |
+| **In thông báo cá nhân hóa từng dòng** | Có | Không |
+| **Dừng giữa chừng theo điều kiện runtime** | `BREAK` ngay lập tức | Cần kỹ thuật Running Total |
+| **Độ phức tạp khi viết** | Nhiều bước hơn | Ngắn gọn hơn |
+| **Khả năng tối ưu của SQL Server** | Thấp | Cao (Query Optimizer xử lý tốt) |
+
+**Kết luận:**
+
+> Nên ưu tiên sử dụng phương pháp **Set-based** trong hầu hết các trường hợp vì hiệu năng vượt trội. CURSOR chỉ nên dùng khi bài toán bắt buộc xử lý tuần tự từng bản ghi mà Set-based SQL không thể giải quyết được một cách tự nhiên.
+
+---

@@ -192,3 +192,111 @@ CREATE TABLE [LichSuSoLuong] (
 
 ---
 
+### Chèn Dữ Liệu Mẫu Vào Các Bảng
+
+```sql
+INSERT INTO [TheLoai] ([TenTheLoai], [MoTa]) VALUES
+(N'Văn học',            N'Tiểu thuyết, truyện ngắn, thơ ca trong và ngoài nước'),
+(N'Khoa học kỹ thuật',  N'Sách về công nghệ, lập trình, kỹ thuật'),
+(N'Lịch sử',            N'Sách lịch sử Việt Nam và thế giới'),
+(N'Kinh tế',            N'Sách về kinh doanh, tài chính, quản trị'),
+(N'Thiếu nhi',          N'Sách dành cho trẻ em và thanh thiếu niên');
+
+INSERT INTO [Sach] ([TenSach],[TacGia],[NhaXuatBan],[NamXuatBan],[GiaBan],[SoLuongTon],[MaTheLoai]) VALUES
+(N'Số đỏ',               N'Vũ Trọng Phụng',   N'NXB Văn học',     1936, 65000,  5, 1),
+(N'Dế mèn phiêu lưu ký', N'Tô Hoài',          N'NXB Kim Đồng',    1941, 55000,  8, 5),
+(N'Lập trình C# cơ bản', N'Nguyễn Văn An',    N'NXB KHKT',        2020, 180000, 3, 2),
+(N'Clean Code',           N'Robert C. Martin', N'NXB Lao động',    2019, 210000, 4, 2),
+(N'Đắc nhân tâm',        N'Dale Carnegie',    N'NXB Tổng hợp',    2018, 89000,  6, 4),
+(N'Nhà giả kim',          N'Paulo Coelho',     N'NXB Hội nhà văn', 2020, 79000,  7, 1),
+(N'Lịch sử Việt Nam',    N'Nhiều tác giả',    N'NXB KHXH',        2017, 350000, 2, 3),
+(N'Tư duy nhanh và chậm',N'Daniel Kahneman',  N'NXB Thế giới',    2021, 149000, 5, 4);
+
+INSERT INTO [DocGia] ([HoTen],[GioiTinh],[NgaySinh],[DiaChi],[SoDienThoai],[Email]) VALUES
+(N'Nguyễn Thị Mai',  N'Nữ',  '2000-03-15', N'Hà Nội',    '0912345678', 'mai.nguyen@email.com'),
+(N'Trần Văn Hùng',   N'Nam', '1998-07-22', N'TP.HCM',    '0987654321', 'hung.tran@email.com'),
+(N'Lê Thị Hoa',      N'Nữ',  '2001-11-05', N'Đà Nẵng',   '0909123456', 'hoa.le@email.com'),
+(N'Phạm Minh Tuấn',  N'Nam', '1999-05-30', N'Hải Phòng', '0933456789', 'tuan.pham@email.com'),
+(N'Hoàng Thị Lan',   N'Nữ',  '2002-08-18', N'Cần Thơ',   '0965789012', 'lan.hoang@email.com');
+
+INSERT INTO [PhieuMuon] ([MaDocGia],[MaSach],[NgayMuon],[NgayTraDuKien],[SoLuongMuon],[TrangThai]) VALUES
+(1, 3, '2026-04-01', '2026-04-15', 1, N'Đã trả'),
+(2, 4, '2026-04-05', '2026-04-19', 1, N'Đang mượn'),
+(3, 1, '2026-04-10', '2026-04-24', 1, N'Đang mượn'),
+(4, 6, '2026-03-20', '2026-04-03', 1, N'Quá hạn'),
+(5, 5, '2026-04-15', '2026-04-29', 2, N'Đang mượn'),
+(1, 7, '2026-04-18', '2026-05-02', 1, N'Đang mượn');
+```
+
+<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/2eec6e52-c09b-4c5f-8e47-08fec1f03863" />
+
+
+*Chèn dữ liệu mẫu vào các bảng: 5 thể loại, 8 cuốn sách, 5 độc giả và 6 phiếu mượn*
+
+---
+
+## Phần 2: Xây Dựng Function
+
+### Các Loại Hàm Có Sẵn (Built-in Functions)
+
+SQL Server cung cấp hàng trăm hàm có sẵn để xử lý dữ liệu, được chia thành các nhóm chính:
+
+- **Hàm chuỗi (String Functions):** `LEN()`, `SUBSTRING()`, `REPLACE()`, `UPPER()`, `STRING_AGG()`...
+- **Hàm ngày tháng (Date/Time Functions):** `GETDATE()`, `DATEDIFF()`, `DATEADD()`, `FORMAT()`...
+- **Hàm toán học (Mathematical Functions):** `ABS()`, `ROUND()`, `CEILING()`, `FLOOR()`...
+- **Hàm tổng hợp (Aggregate Functions):** `SUM()`, `COUNT()`, `MAX()`, `MIN()`, `AVG()`...
+- **Hàm chuyển đổi kiểu (Conversion Functions):** `CAST()`, `CONVERT()`, `TRY_CAST()`...
+- **Hàm hệ thống (System Functions):** `ISNULL()`, `COALESCE()`, `IIF()`, `NEWID()`, `CHOOSE()`...
+
+### Tìm Hiểu Chi Tiết Một Số Built-in Functions
+
+**`DATEDIFF()` — Trụ cột của bài toán thư viện:**
+
+Đây là hàm quan trọng nhất trong bài toán quản lý mượn sách, vì toàn bộ logic tính tiền phạt đều xoay quanh việc đếm số ngày chênh lệch giữa ngày trả dự kiến và ngày trả thực tế.
+
+```sql
+-- Tính số ngày mỗi phiếu mượn đã ở trạng thái mượn
+SELECT MaPhieuMuon, NgayMuon, NgayTraDuKien,
+       DATEDIFF(DAY, NgayMuon, NgayTraDuKien) AS SoNgayDuKien
+FROM [PhieuMuon]
+WHERE NgayTraThucTe IS NOT NULL;
+```
+
+<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/bad74801-4f55-447f-a849-ce82b078c2cb" />
+
+
+*`DATEDIFF()` tính khoảng cách ngày giữa ngày mượn và ngày trả — nền tảng cho bài toán tính phạt*
+
+---
+
+**`IIF()` — Rẽ nhánh nhanh gọn thay cho CASE WHEN:**
+
+```sql
+-- Kiểm tra tình trạng tồn kho của từng cuốn sách
+SELECT TenSach, SoLuongTon,
+       IIF(SoLuongTon > 0, N'Còn sách', N'Hết sách') AS TinhTrang
+FROM [Sach];
+```
+
+<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/06b22a08-3987-4a4a-9b52-9c99d0b6982a" />
+
+
+*`IIF()` giúp dịch dữ liệu số thành nhãn có ý nghĩa, ngắn gọn hơn nhiều so với CASE WHEN*
+
+---
+
+**`TRY_CAST()` — Ép kiểu an toàn, không gây lỗi:**
+
+```sql
+-- Ép kiểu an toàn: nếu giá trị không hợp lệ sẽ trả về NULL thay vì crash
+SELECT TRY_CAST('2026-13-45' AS DATE) AS KetQua; -- Trả về NULL
+SELECT TRY_CAST('abc123' AS INT)      AS KetQua; -- Trả về NULL
+```
+
+<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/0d2dc372-646b-4d29-99ab-327058d32e94" />
+
+
+*`TRY_CAST()` rất hữu ích khi import dữ liệu thô từ file Excel hoặc CSV có thể chứa giá trị lỗi định dạng*
+
+---
+

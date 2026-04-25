@@ -512,3 +512,142 @@ ORDER BY [SoLanDuocMuon] DESC;
 *Kết quả: Mỗi cuốn sách được gán nhãn rõ ràng. Sách bị đánh " Sách Ế" sẽ được đưa vào chương trình khuyến khích đọc sách đặc biệt của thư viện.*
 
 ---
+
+## Phần 3: Xây Dựng Stored Procedure
+
+### Stored Procedure Hệ Thống (System Stored Procedures)
+
+Trong SQL Server, hệ quản trị cung cấp nhiều Stored Procedure hệ thống nhằm hỗ trợ quản trị, truy vấn thông tin và thao tác với cơ sở dữ liệu.
+
+**Các nhóm Stored Procedure phổ biến:**
+
+- **Nhóm quản lý đối tượng:** Xem cấu trúc bảng, đổi tên, kiểm tra metadata.
+- **Nhóm bảo mật:** Quản lý user, login, phân quyền truy cập.
+- **Nhóm thông tin hệ thống:** Cung cấp thông tin về cấu trúc database, bảng, cột, index.
+- **Nhóm hiệu năng:** Theo dõi hoạt động hệ thống, kiểm tra cache, tài nguyên.
+
+**Đặc điểm chung:** Thường có tiền tố `sp_`, được tích hợp sẵn, gọi trực tiếp không cần định nghĩa.
+
+### Một Vài System SP Và Cách Dùng
+
+**`sp_helptext` — Trình soi mã nguồn ẩn:**
+
+Khi có quá nhiều Function/Trigger/SP cũ do người khác viết mà không biết logic bên trong là gì, SP này in ra toàn bộ source code của đối tượng đó.
+
+```sql
+EXEC sp_helptext 'fn_TinhTienPhat'; -- In ra source code của hàm đã viết
+```
+
+<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/cfe69f6a-a422-495e-81ad-9e73c8500963" />
+
+
+*`sp_helptext` trả về toàn bộ source code của `fn_TinhTienPhat` — vô cùng hữu ích khi bàn giao dự án hoặc kiểm tra logic của code cũ*
+
+---
+
+**`sp_spaceused` — Kế toán dung lượng:**
+
+Báo cáo nhanh xem một bảng đang chiếm bao nhiêu dung lượng trên ổ cứng và có bao nhiêu dòng dữ liệu — nhanh hơn nhiều so với `COUNT(*)`.
+
+```sql
+EXEC sp_spaceused 'PhieuMuon'; -- Kiểm tra bảng PhieuMuon nặng bao nhiêu KB
+```
+
+<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/4cb5d943-9b25-418e-9884-44e91453b9ca" />
+
+*`sp_spaceused` báo cáo số dòng và dung lượng bảng `PhieuMuon` — hữu ích để theo dõi sự phình to của dữ liệu theo thời gian vận hành*
+
+---
+
+### Viết 01 Stored Procedure Có Kiểm Tra Logic — Đăng Ký Mượn Sách
+
+**Ý tưởng (Scenario): "Quầy đăng ký mượn sách nhanh"**
+
+Tình huống: Độc giả đến quầy thủ thư và muốn mượn một cuốn sách. Thủ thư chỉ cần nhập **Mã độc giả** và **Mã sách** vào hệ thống — toàn bộ việc kiểm tra điều kiện hợp lệ sẽ được thực hiện tự động. Nếu có bất kỳ vấn đề nào (thẻ bị khóa, sách hết kho, ngày trả không hợp lệ...), hệ thống báo ngay ra màn hình thay vì gây lỗi SQL khó hiểu.
+
+**Luồng xử lý tổng quát:**
+
+- **Bước 1.** SP nhận vào: `@MaDocGia`, `@MaSach`, `@NgayTraDuKien`, `@SoLuong`.
+- **Bước 2.** Kiểm tra độc giả: có tồn tại và `TrangThai = 1` (đang hoạt động) không? Nếu không → báo lỗi, thoát.
+- **Bước 3.** Kiểm tra sách: có tồn tại và `SoLuongTon >= @SoLuong` không? Nếu không đủ → báo lỗi kèm số còn lại, thoát.
+- **Bước 4.** Kiểm tra ngày trả: phải sau ngày hôm nay. Nếu không → báo lỗi, thoát.
+- **Bước 5.** Tất cả hợp lệ: INSERT vào `PhieuMuon` và trừ `SoLuongTon` trong bảng `Sach`.
+- **Bước 6.** In thông báo thành công.
+
+```sql
+CREATE PROCEDURE [dbo].[sp_MuonSach]
+    @MaDocGia       INT,
+    @MaSach         INT,
+    @NgayTraDuKien  DATE,
+    @SoLuong        INT = 1
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    -- Kiểm tra độc giả tồn tại và đang hoạt động
+    IF NOT EXISTS (
+        SELECT 1 FROM [DocGia]
+        WHERE [MaDocGia] = @MaDocGia AND [TrangThai] = 1
+    )
+    BEGIN
+        RAISERROR(N'Độc giả không tồn tại hoặc thẻ đã bị khóa!', 16, 1);
+        RETURN;
+    END
+
+    -- Kiểm tra sách tồn tại
+    DECLARE @TonKho INT;
+    SELECT @TonKho = [SoLuongTon] FROM [Sach] WHERE [MaSach] = @MaSach;
+    IF @TonKho IS NULL
+    BEGIN
+        RAISERROR(N'Sách không tồn tại trong hệ thống!', 16, 1);
+        RETURN;
+    END
+
+    -- Kiểm tra đủ số lượng
+    IF @TonKho < @SoLuong
+    BEGIN
+        RAISERROR(N'Không đủ sách! Hiện chỉ còn %d cuốn trong kho.', 16, 1, @TonKho);
+        RETURN;
+    END
+
+    -- Kiểm tra ngày trả hợp lệ
+    IF @NgayTraDuKien <= CAST(GETDATE() AS DATE)
+    BEGIN
+        RAISERROR(N'Ngày trả dự kiến phải sau ngày hôm nay!', 16, 1);
+        RETURN;
+    END
+
+    -- Tất cả hợp lệ: tạo phiếu mượn và trừ tồn kho
+    INSERT INTO [PhieuMuon] ([MaDocGia],[MaSach],[NgayMuon],[NgayTraDuKien],[SoLuongMuon],[TrangThai])
+    VALUES (@MaDocGia, @MaSach, GETDATE(), @NgayTraDuKien, @SoLuong, N'Đang mượn');
+
+    UPDATE [Sach]
+    SET [SoLuongTon] = [SoLuongTon] - @SoLuong
+    WHERE [MaSach] = @MaSach;
+
+    PRINT N' Đăng ký mượn sách thành công!';
+END;
+GO
+```
+
+<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/c9621097-1c0f-4d29-b9fc-89144b0293ac" />
+
+*Tạo Stored Procedure `sp_MuonSach` — bao gồm đầy đủ các lớp kiểm tra logic nghiệp vụ trước khi ghi dữ liệu*
+
+```sql
+-- Thử đăng ký mượn thành công
+EXEC [dbo].[sp_MuonSach] @MaDocGia=3, @MaSach=8,
+     @NgayTraDuKien='2026-05-10', @SoLuong=1;
+
+-- Thử đăng ký với số lượng vượt tồn kho (sách số 7 chỉ còn 2 cuốn)
+EXEC [dbo].[sp_MuonSach] @MaDocGia=2, @MaSach=7,
+     @NgayTraDuKien='2026-05-10', @SoLuong=99;
+```
+
+<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/c1c5ef75-4763-4fff-9444-915f6d98c3b3" />
+<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/0fb6551f-c739-4b37-9ed9-dce401c35336" />
+
+
+*Lần gọi đầu in ra " Đăng ký mượn sách thành công!". Lần gọi thứ hai báo lỗi rõ ràng: "Không đủ sách! Hiện chỉ còn 2 cuốn trong kho." — thân thiện hơn nhiều so với lỗi SQL thô.*
+
+---

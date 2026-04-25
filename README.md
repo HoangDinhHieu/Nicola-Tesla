@@ -714,3 +714,73 @@ WHERE dg.[MaDocGia] = 4;
 *Tham số OUTPUT cho phép SP trả về nhiều giá trị cùng lúc. Ảnh hiển thị độc giả Phạm Minh Tuấn đang có công nợ tiền phạt — thông tin này được phần mềm đọc về để hiển thị trên giao diện người dùng.*
 
 ---
+
+### Viết 01 Stored Procedure Trả Về Result Set — Báo Cáo Tổng Hợp Mượn Sách
+
+**Ý tưởng (Scenario): "Màn hình quản trị buổi sáng của trưởng thư viện"**
+
+Tình huống: Mỗi buổi sáng, trưởng thư viện muốn xem báo cáo tổng hợp: ai đang mượn sách gì, khi nào trả, đang nợ bao nhiêu tiền phạt. Báo cáo cần lọc được theo khoảng thời gian và trạng thái tùy chọn. Dữ liệu cần JOIN từ 4 bảng: `PhieuMuon` + `DocGia` + `Sach` + `TheLoai`.
+
+**Luồng xử lý tổng quát:**
+
+- **Bước 1.** SP nhận vào 3 tham số tùy chọn: `@TuNgay`, `@DenNgay`, `@TrangThai` (đều có thể `NULL` = lấy tất cả).
+- **Bước 2.** Nếu không truyền ngày, mặc định lấy 30 ngày gần nhất.
+- **Bước 3.** Thực hiện JOIN 4 bảng để lấy đầy đủ thông tin: tên độc giả, tên sách, thể loại, trạng thái...
+- **Bước 4.** Áp dụng bộ lọc linh hoạt: kỹ thuật `@TrangThai IS NULL OR pm.TrangThai = @TrangThai` cho phép không truyền tham số thì lấy tất cả.
+- **Bước 5.** Tính tiền phạt cho từng dòng bằng cách gọi lại `fn_TinhTienPhat`.
+- **Bước 6.** Trả về toàn bộ tập kết quả (Result Set).
+
+```sql
+CREATE PROCEDURE [dbo].[sp_BaoCaoMuonSach]
+    @TuNgay     DATE         = NULL,
+    @DenNgay    DATE         = NULL,
+    @TrangThai  NVARCHAR(20) = NULL
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    IF @TuNgay  IS NULL SET @TuNgay  = DATEADD(DAY, -30, GETDATE());
+    IF @DenNgay IS NULL SET @DenNgay = GETDATE();
+
+    SELECT
+        pm.[MaPhieuMuon],
+        dg.[HoTen]     AS [TenDocGia],
+        dg.[SoDienThoai],
+        s.[TenSach],
+        tl.[TenTheLoai],
+        pm.[NgayMuon],
+        pm.[NgayTraDuKien],
+        pm.[NgayTraThucTe],
+        pm.[SoLuongMuon],
+        pm.[TrangThai],
+        dbo.[fn_TinhTienPhat](pm.[NgayTraDuKien], pm.[NgayTraThucTe]) AS [TienPhat_VND],
+        DATEDIFF(DAY, pm.[NgayMuon], ISNULL(pm.[NgayTraThucTe], GETDATE())) AS [SoNgayMuon]
+    FROM [PhieuMuon] pm
+    JOIN [DocGia]  dg ON pm.[MaDocGia]  = dg.[MaDocGia]
+    JOIN [Sach]    s  ON pm.[MaSach]    = s.[MaSach]
+    JOIN [TheLoai] tl ON s.[MaTheLoai]  = tl.[MaTheLoai]
+    WHERE pm.[NgayMuon] BETWEEN @TuNgay AND @DenNgay
+      AND (@TrangThai IS NULL OR pm.[TrangThai] = @TrangThai)
+    ORDER BY pm.[NgayMuon] DESC;
+END;
+GO
+```
+
+<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/013d45a2-f46f-4266-9f07-e2cc14856e6a" />
+
+*Tạo Stored Procedure `sp_BaoCaoMuonSach` — JOIN 4 bảng, hỗ trợ bộ lọc linh hoạt, tái sử dụng Scalar Function để tính phạt ngay trong SELECT*
+
+```sql
+-- Xem tất cả phiếu mượn từ tháng 3 đến hết tháng 4
+EXEC [dbo].[sp_BaoCaoMuonSach]
+    @TuNgay = '2026-03-01', @DenNgay = '2026-04-30';
+
+-- Chỉ xem các phiếu đang quá hạn
+EXEC [dbo].[sp_BaoCaoMuonSach] @TrangThai = N'Quá hạn';
+```
+
+<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/e864e0fa-f3ae-4730-9e04-5f7f632130d4" />
+
+*Kết quả trả về tập dữ liệu đầy đủ từ 4 bảng JOIN nhau. Kỹ thuật optional filter (`@TrangThai IS NULL`) cho phép linh hoạt lọc hoặc lấy tất cả chỉ với 1 SP duy nhất.*
+
+---

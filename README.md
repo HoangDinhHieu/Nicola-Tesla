@@ -1032,3 +1032,63 @@ GO
 *Tab Messages hiển thị từng dòng thông báo cá nhân hóa: tên người nhận, số tiền, ngân sách còn lại, và dừng đúng lúc khi hết tiền*
 
 ---
+
+### Cách 2: Không Dùng CURSOR — Dùng Window Function (Set-based)
+
+Trong SQL, có thể dùng `SUM() OVER (ORDER BY ...)` để tính tổng lũy kế (Running Total). Nếu tổng tiền lũy kế từ người đầu tiên đến người hiện tại vẫn ≤ 1.500.000 thì người đó được nhận voucher — cập nhật đồng loạt chỉ trong 1 lệnh duy nhất.
+
+```sql
+DECLARE @NganSach      MONEY = 1500000;
+DECLARE @TienMoiNguoi  MONEY = 300000;
+
+WITH DuKienNhanVoucher AS (
+    SELECT
+        dg.[MaDocGia],
+        dg.[HoTen],
+        COUNT(pm.[MaPhieuMuon]) AS SoLanMuon,
+        -- Tính tổng tích lũy theo thứ tự ưu tiên (mượn nhiều → ít)
+        SUM(@TienMoiNguoi) OVER (
+            ORDER BY COUNT(pm.[MaPhieuMuon]) DESC,
+                     dg.[MaDocGia] ASC          -- tie-breaker
+        ) AS TongTienLuyKe
+    FROM [DocGia] dg
+    JOIN [PhieuMuon] pm ON dg.[MaDocGia] = pm.[MaDocGia]
+    GROUP BY dg.[MaDocGia], dg.[HoTen]
+    HAVING COUNT(pm.[MaPhieuMuon]) >= 2
+)
+-- Cập nhật đồng loạt một phát cho những người trong giới hạn ngân sách
+UPDATE d
+SET    d.[TienVoucher] = ISNULL(d.[TienVoucher], 0) + @TienMoiNguoi
+FROM   [DocGia] d
+JOIN   DuKienNhanVoucher cte ON d.[MaDocGia] = cte.[MaDocGia]
+WHERE  cte.[TongTienLuyKe] <= @NganSach;
+
+-- Kiểm tra kết quả sau khi cập nhật
+SELECT
+    dg.[MaDocGia],
+    dg.[HoTen],
+    cte.SoLanMuon,
+    cte.TongTienLuyKe,
+    dg.[TienVoucher]
+FROM   [DocGia] dg
+JOIN (
+    SELECT
+        dg2.[MaDocGia],
+        COUNT(pm.[MaPhieuMuon]) AS SoLanMuon,
+        SUM(@TienMoiNguoi) OVER (
+            ORDER BY COUNT(pm.[MaPhieuMuon]) DESC,
+                     dg2.[MaDocGia] ASC
+        ) AS TongTienLuyKe
+    FROM [DocGia] dg2
+    JOIN [PhieuMuon] pm ON dg2.[MaDocGia] = pm.[MaDocGia]
+    GROUP BY dg2.[MaDocGia]
+    HAVING COUNT(pm.[MaPhieuMuon]) >= 2
+) cte ON dg.[MaDocGia] = cte.[MaDocGia]
+WHERE  cte.[TongTienLuyKe] <= @NganSach
+ORDER BY cte.SoLanMuon DESC;
+GO
+```
+
+<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/18a5d1bc-4140-4d17-a166-2ddc3fe57c9c" />
+
+*Cùng kết quả nhưng chỉ bằng 1 câu lệnh UPDATE duy nhất — không cần mở CURSOR, không cần FETCH, không cần CLOSE/DEALLOCATE*

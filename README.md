@@ -300,3 +300,64 @@ SELECT TRY_CAST('abc123' AS INT)      AS KetQua; -- Trả về NULL
 
 ---
 
+### Hàm Do Người Dùng Tự Viết (User-Defined Functions — UDFs)
+
+**a) Mục đích**
+
+UDF được sử dụng để đóng gói các logic nghiệp vụ phức tạp thành một khối xử lý có thể tái sử dụng nhiều lần. Giúp các câu lệnh `SELECT`, `UPDATE` trở nên ngắn gọn, dễ đọc và dễ bảo trì. Tăng tính nhất quán cho toàn hệ thống — logic chỉ viết một lần, sửa một lần là sửa được toàn bộ.
+
+**b) Phân loại và khi nào dùng**
+
+| Loại | Trả về | Dùng khi nào |
+|---|---|---|
+| **Scalar Function** | 1 giá trị duy nhất (số, chuỗi, ngày...) | Tính toán trên từng dòng, ví dụ: tính tiền phạt, tính thuế |
+| **Inline TVF** | Bảng kết quả (1 câu SELECT) | Lọc dữ liệu có tham số, thay thế View cứng nhắc |
+| **Multi-statement TVF** | Bảng kết quả (nhiều câu lệnh) | Logic phức tạp nhiều bước không thể viết trong 1 SELECT |
+
+**c) Tại sao vẫn cần UDF khi đã có Built-in Functions?**
+
+Mặc dù SQL Server cung cấp nhiều hàm dựng sẵn, nhưng các hàm này chỉ xử lý các tác vụ cơ bản và mang tính chung. Trong thực tế, mỗi hệ thống có quy tắc nghiệp vụ riêng mà không hàm nào có thể biết trước. Ví dụ: SQL Server không thể biết rằng *"thư viện của trường phạt 2.000đ/ngày trễ hạn"* hay *"mượn quá 5 cuốn cùng lúc thì bị giới hạn"* — đó là quy tắc riêng của từng tổ chức, và chỉ UDF mới giải quyết được.
+
+---
+
+### Viết 1 Scalar Function — Tính Tiền Phạt Mượn Sách Quá Hạn
+
+**Ý tưởng (Scenario): "Bộ máy tính phạt tự động"**
+
+Tình huống: Thư viện quy định mỗi ngày trả sách trễ hạn bị phạt **2.000 VNĐ/ngày**. Thủ thư cần một công cụ để tính tiền phạt ngay lập tức khi khách đến trả sách, mà không cần bấm máy tính thủ công. Hàm này sẽ được gọi lặp lại ở nhiều nơi: trong báo cáo, trong thủ tục tính hóa đơn, trong CURSOR...
+
+**Luồng xử lý tổng quát:**
+
+- **Bước 1.** Hàm nhận vào 2 tham số: `@NgayTraDuKien` và `@NgayTraThucTe`.
+- **Bước 2.** Nếu `@NgayTraThucTe` là NULL (sách chưa trả), lấy ngày hiện tại `GETDATE()` để tính cho đến hôm nay.
+- **Bước 3.** Tính số ngày chênh lệch bằng `DATEDIFF(DAY, ...)`.
+- **Bước 4.** Nếu chênh lệch > 0 (quá hạn) thì nhân với 2.000. Nếu ≤ 0 (còn hạn) thì trả về 0.
+- **Bước 5.** Trả về số tiền phạt dạng `MONEY`.
+
+```sql
+CREATE FUNCTION [dbo].[fn_TinhTienPhat]
+(
+    @NgayTraDuKien DATE,
+    @NgayTraThucTe DATE   -- NULL = sách chưa trả, tính đến hôm nay
+)
+RETURNS MONEY
+AS
+BEGIN
+    DECLARE @NgayTra DATE      = ISNULL(@NgayTraThucTe, GETDATE());
+    DECLARE @SoNgayQuaHan INT  = DATEDIFF(DAY, @NgayTraDuKien, @NgayTra);
+    DECLARE @TienPhat MONEY    = 0;
+
+    IF @SoNgayQuaHan > 0
+        SET @TienPhat = @SoNgayQuaHan * 2000;
+
+    RETURN @TienPhat;
+END;
+GO
+```
+
+<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/e4552d38-dc39-4f74-a564-fd9c706a2ac0" />
+
+
+*Tạo Scalar Function `fn_TinhTienPhat` — đóng gói logic tính phạt để tái sử dụng ở nhiều nơi trong hệ thống*
+
+

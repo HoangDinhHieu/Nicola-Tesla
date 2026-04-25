@@ -438,3 +438,77 @@ SELECT * FROM dbo.[fn_GetSachTheoTheLoai](2);
 
 ---
 
+### Viết 1 Multi-statement Table-Valued Function — Thống Kê Hiệu Quả Hoạt Động Sách
+
+**Ý tưởng (Scenario): "Bảng tin tức hàng tháng trên màn hình của ban giám đốc thư viện"**
+
+Tình huống: Ban giám đốc thư viện cần xem báo cáo hàng tháng: cuốn sách nào đang được mượn nhiều nhất (cần nhập thêm), cuốn nào nằm im trên giá (cần làm chương trình khuyến đọc). Báo cáo này cần phân loại và gán nhãn đánh giá cho từng đầu sách — logic này phức tạp nhiều bước, không thể biểu diễn trong một câu SELECT đơn, nên phải dùng **Multi-statement TVF** với biến bảng.
+
+**Luồng xử lý tổng quát:**
+
+- **Bước 1.** Hàm nhận vào `@Thang` và `@Nam` để xác định kỳ báo cáo.
+- **Bước 2.** Khai báo biến bảng `@BangThongKe` để lưu kết quả trung gian.
+- **Bước 3.** INSERT vào biến bảng: lấy tất cả sách, LEFT JOIN với `PhieuMuon` theo tháng/năm, đếm số lần mượn. Cột đánh giá ban đầu để `N'Chưa xét'`.
+- **Bước 4.** Dùng **3 lệnh UPDATE riêng biệt** để gán nhãn: Hot (≥ 3 lần), Bình thường (1–2 lần), Ế (0 lần). Đây là phần logic nhiều bước không thể viết bằng 1 SELECT.
+- **Bước 5.** Trả về toàn bộ biến bảng.
+
+```sql
+CREATE FUNCTION [dbo].[fn_ThongKeSachTheoThang]
+(
+    @Thang INT,
+    @Nam   INT
+)
+RETURNS @BangThongKe TABLE (
+    [MaSach]          INT,
+    [TenSach]         NVARCHAR(300),
+    [TenTheLoai]      NVARCHAR(100),
+    [SoLanDuocMuon]   INT,
+    [DanhGiaHoatDong] NVARCHAR(50)
+)
+AS
+BEGIN
+    -- Bước 1: Đẩy dữ liệu cơ bản vào biến bảng (tất cả sách + đếm lần mượn)
+    INSERT INTO @BangThongKe ([MaSach],[TenSach],[TenTheLoai],[SoLanDuocMuon],[DanhGiaHoatDong])
+    SELECT
+        s.[MaSach], s.[TenSach], tl.[TenTheLoai],
+        COUNT(pm.[MaPhieuMuon]),
+        N'Chưa xét'
+    FROM [Sach] s
+    LEFT JOIN [TheLoai]   tl ON s.[MaTheLoai] = tl.[MaTheLoai]
+    LEFT JOIN [PhieuMuon] pm ON s.[MaSach]    = pm.[MaSach]
+         AND MONTH(pm.[NgayMuon]) = @Thang
+         AND YEAR(pm.[NgayMuon])  = @Nam
+    GROUP BY s.[MaSach], s.[TenSach], tl.[TenTheLoai];
+
+    -- Bước 2: Phân loại bằng 3 lệnh UPDATE riêng biệt (logic nhiều bước)
+    UPDATE @BangThongKe SET [DanhGiaHoatDong] = N' Sách Hot — Cần nhập thêm'
+    WHERE [SoLanDuocMuon] >= 3;
+
+    UPDATE @BangThongKe SET [DanhGiaHoatDong] = N' Bình thường'
+    WHERE [SoLanDuocMuon] > 0 AND [SoLanDuocMuon] < 3;
+
+    UPDATE @BangThongKe SET [DanhGiaHoatDong] = N' Sách Ế — Cần khuyến khích'
+    WHERE [SoLanDuocMuon] = 0;
+
+    RETURN;
+END;
+GO
+```
+
+<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/26a766d6-9f45-4a6d-ad81-f6aee5966e12" />
+
+
+*Tạo Multi-statement TVF `fn_ThongKeSachTheoThang` — dùng biến bảng và nhiều bước UPDATE để phân loại sách, điều không thể làm trong Inline TVF*
+
+```sql
+-- Khai thác: báo cáo hiệu quả hoạt động sách tháng 4 năm 2026
+SELECT * FROM dbo.[fn_ThongKeSachTheoThang](4, 2026)
+ORDER BY [SoLanDuocMuon] DESC;
+```
+
+<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/a4ed50c0-3265-44c0-8f7c-a15676b558fc" />
+
+
+*Kết quả: Mỗi cuốn sách được gán nhãn rõ ràng. Sách bị đánh " Sách Ế" sẽ được đưa vào chương trình khuyến khích đọc sách đặc biệt của thư viện.*
+
+---

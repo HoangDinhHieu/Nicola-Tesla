@@ -784,3 +784,146 @@ EXEC [dbo].[sp_BaoCaoMuonSach] @TrangThai = N'Quá hạn';
 *Kết quả trả về tập dữ liệu đầy đủ từ 4 bảng JOIN nhau. Kỹ thuật optional filter (`@TrangThai IS NULL`) cho phép linh hoạt lọc hoặc lấy tất cả chỉ với 1 SP duy nhất.*
 
 ---
+
+## Phần 4: Trigger và Xử Lý Logic Nghiệp Vụ
+
+### Yêu Cầu 1: Trigger Tự Động Ghi Nhật Ký Tồn Kho
+
+**Ý tưởng (Scenario): "Camera an ninh của kho sách"**
+
+Tình huống thực tế: Thư viện cần theo dõi lịch sử thay đổi số lượng sách trong kho để phát hiện sai lệch — kiểm tra xem sách bị mất lúc nào hay bị mượn khi nào. Mỗi khi có phiếu mượn mới (**Bảng A = `PhieuMuon`**), hệ thống phải tự động ghi lại trạng thái tồn kho trước và sau vào nhật ký (**Bảng B = `LichSuSoLuong`**) — không cần lập trình viên gọi thủ công, không thể bỏ sót.
+
+**Luồng xử lý tổng quát:**
+
+- **Bước 1.** Trigger gắn trên bảng `PhieuMuon`, sự kiện `AFTER INSERT`.
+- **Bước 2.** Khi có phiếu mượn mới, SQL Server tạo bảng ảo `inserted` chứa các dòng vừa thêm.
+- **Bước 3.** Trigger đọc từ `inserted`, JOIN với bảng `Sach` để lấy `SoLuongTon` hiện tại (sau khi đã trừ).
+- **Bước 4.** Tính lại `SoLuongTruoc` = `SoLuongTon hiện tại + SoLuongMuon`.
+- **Bước 5.** INSERT vào `LichSuSoLuong` một bản ghi lưu vết đầy đủ.
+
+```sql
+CREATE TRIGGER [trg_PhieuMuon_GhiLichSuKho]
+ON [PhieuMuon]
+AFTER INSERT
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    INSERT INTO [LichSuSoLuong] ([MaSach],[SoLuongTruoc],[SoLuongSau],[HanhDong])
+    SELECT
+        i.[MaSach],
+        s.[SoLuongTon] + i.[SoLuongMuon],  -- Số lượng trước khi bị trừ
+        s.[SoLuongTon],                      -- Số lượng sau khi đã trừ
+        N'MUON'
+    FROM [inserted] i
+    JOIN [Sach] s ON i.[MaSach] = s.[MaSach];
+END;
+GO
+```
+
+<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/8b0d7c23-6efa-4c49-b5f5-a38a84497b57" />
+
+*Tạo Trigger `trg_PhieuMuon_GhiLichSuKho` — tự động kích hoạt sau mỗi lần INSERT vào PhieuMuon, không cần gọi thủ công*
+
+```sql
+-- Demo trigger: thêm một phiếu mượn mới để trigger kích hoạt
+INSERT INTO [PhieuMuon] ([MaDocGia],[MaSach],[NgayMuon],[NgayTraDuKien],[SoLuongMuon],[TrangThai])
+VALUES (2, 5, GETDATE(), DATEADD(DAY, 14, GETDATE()), 1, N'Đang mượn');
+
+-- Kiểm tra xem trigger có ghi vào LichSuSoLuong không
+SELECT * FROM [LichSuSoLuong];
+```
+
+<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/93442f03-d2c2-417c-8729-67dbaf06baa4" />
+
+*Sau khi INSERT 1 dòng vào PhieuMuon, bảng LichSuSoLuong tự động có thêm 1 bản ghi ghi lại SoLuongTruoc và SoLuongSau. Đây là audit trail tự động — không cần sửa code ứng dụng, không thể bỏ sót.*
+
+---
+
+### Yêu Cầu 2: Tình Huống Trigger "Vòng Lặp" (A Gọi B, B Gọi A)
+
+**Ý tưởng (Scenario): "Hệ thống điểm thưởng tích lũy khi mượn sách"**
+
+Tình huống: Thư viện muốn khuyến khích đọc sách bằng hệ thống điểm thưởng:
+
+- **Bảng A (`DocGia`):** Thêm cột `DiemTichLuy` — cộng điểm mỗi khi mượn sách.
+- **Bảng B (`PhieuMuon`):** Thêm cột `DaCoThuong` — đánh dấu phiếu mượn đã được tặng thưởng.
+- **Trigger 1** (trên `PhieuMuon`): Khi có phiếu mượn mới INSERT, tự động cộng 10 điểm vào `DiemTichLuy` của độc giả đó → cập nhật bảng `DocGia`.
+- **Trigger 2** (trên `DocGia`): Khi `DiemTichLuy` được cập nhật, tự động đánh dấu `DaCoThuong = 1` vào phiếu mượn mới nhất → cập nhật bảng `PhieuMuon`.
+
+**Chuẩn bị dữ liệu:**
+
+```sql
+ALTER TABLE [DocGia]    ADD [DiemTichLuy] INT NOT NULL DEFAULT 0;
+ALTER TABLE [PhieuMuon] ADD [DaCoThuong]  BIT NOT NULL DEFAULT 0;
+GO
+```
+
+```sql
+-- Trigger 1: INSERT vào PhieuMuon → UPDATE DiemTichLuy trong DocGia
+CREATE TRIGGER [trg_PhieuMuon_CongDiem]
+ON [PhieuMuon]
+AFTER INSERT
+AS
+BEGIN
+    PRINT N'[Trigger 1 KÍCH HOẠT]: Có phiếu mượn mới, cộng 10 điểm cho độc giả...';
+
+    UPDATE [DocGia]
+    SET [DiemTichLuy] = [DiemTichLuy] + 10
+    WHERE [MaDocGia] IN (SELECT [MaDocGia] FROM [inserted]);
+END;
+GO
+
+-- Trigger 2: UPDATE DocGia → UPDATE DaCoThuong trong PhieuMuon
+CREATE TRIGGER [trg_DocGia_TangThuong]
+ON [DocGia]
+AFTER UPDATE
+AS
+BEGIN
+    IF UPDATE([DiemTichLuy])
+    BEGIN
+        PRINT N'[Trigger 2 KÍCH HOẠT]: Điểm tích lũy tăng, đánh dấu thưởng cho phiếu mượn mới nhất...';
+
+        UPDATE [PhieuMuon]
+        SET [DaCoThuong] = 1
+        WHERE [MaPhieuMuon] IN (
+            SELECT TOP 1 pm.[MaPhieuMuon]
+            FROM [PhieuMuon] pm
+            JOIN [inserted] i ON pm.[MaDocGia] = i.[MaDocGia]
+            ORDER BY pm.[MaPhieuMuon] DESC
+        );
+    END
+END;
+GO
+```
+
+<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/3310a767-38c2-485a-8f4c-dc2fde0766bf" />
+
+*Tạo cặp Trigger lồng nhau: `trg_PhieuMuon_CongDiem` (A→B) và `trg_DocGia_TangThuong` (B→A)*
+
+```sql
+-- Kích hoạt chuỗi Trigger bằng cách INSERT 1 phiếu mượn mới
+INSERT INTO [PhieuMuon] ([MaDocGia],[MaSach],[NgayMuon],[NgayTraDuKien],[SoLuongMuon],[TrangThai])
+VALUES (1, 2, GETDATE(), DATEADD(DAY, 7, GETDATE()), 1, N'Đang mượn');
+```
+
+<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/571ccce6-c461-4f47-944c-239511465e19" />
+
+*Tab Messages hiển thị: "[Trigger 1 KÍCH HOẠT]..." rồi ngay sau đó "[Trigger 2 KÍCH HOẠT]..." — chuỗi kích hoạt tuần tự rõ ràng*
+
+**Phân tích kết quả:**
+
+1. Lệnh `INSERT` kích hoạt **Trigger 1** (trên bảng `PhieuMuon`).
+2. Bên trong Trigger 1 có lệnh `UPDATE DocGia` → thực thi thành công.
+3. Hành động `UPDATE DocGia` đóng vai trò "mồi lửa" kích hoạt **Trigger 2** (vì Trigger 2 đang lắng nghe `UPDATE` trên bảng `DocGia`).
+4. Bên trong Trigger 2 có lệnh `UPDATE PhieuMuon` → thực thi thành công.
+5. Chuỗi dừng tại đây vì không có trigger nào lắng nghe `UPDATE` trên bảng `PhieuMuon`.
+
+**Nhận xét về tình trạng Circular Trigger:**
+
+> Nếu thiết kế không cẩn thận: A → UPDATE B → Trigger B → UPDATE A → Trigger A → UPDATE B → ... chuỗi này sẽ chạy mãi. SQL Server sẽ cho phép lồng tối đa **32 cấp** rồi mới báo lỗi: *"Maximum stored procedure, function, trigger, or view nesting level exceeded (limit 32)"*. Để phòng tránh:
+> 1. Kiểm tra `TRIGGER_NESTLEVEL()` trong thân trigger — nếu > 1 thì `RETURN` thoát sớm.
+> 2. Tắt tính năng nested trigger: `EXEC sp_configure 'nested triggers', 0; RECONFIGURE;`
+> 3. Thiết kế lại để tránh phụ thuộc vòng tròn giữa 2 bảng.
+
+---

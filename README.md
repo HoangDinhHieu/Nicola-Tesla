@@ -927,3 +927,108 @@ VALUES (1, 2, GETDATE(), DATEADD(DAY, 7, GETDATE()), 1, N'Đang mượn');
 > 3. Thiết kế lại để tránh phụ thuộc vòng tròn giữa 2 bảng.
 
 ---
+
+## Phần 5: Cursor và Duyệt Dữ Liệu
+
+### Yêu Cầu 1: Sử Dụng CURSOR Và So Sánh Với Không Dùng CURSOR
+
+**Ý tưởng (Scenario): "Phân phát Phiếu Học Bổng Đọc Sách (Hết ngân sách thì dừng)"**
+
+Tình huống: Nhân dịp kỷ niệm thành lập trường, thư viện được cấp **ngân sách 1.500.000 VNĐ** để tặng voucher đổi sách cho các độc giả trung thành. Mỗi độc giả đã từng mượn **từ 2 phiếu trở lên** được tặng voucher **300.000 VNĐ**. Quá trình phân phát phải **dừng ngay lập tức khi ngân sách cạn** — không được chi âm.
+
+**Chuẩn bị dữ liệu:**
+
+```sql
+ALTER TABLE [DocGia] ADD [TienVoucher] MONEY NOT NULL DEFAULT 0;
+GO
+```
+
+---
+
+### Cách 1: Sử Dụng CURSOR
+
+Logic: Cầm 1,5 triệu trên tay, gặp độc giả đủ điều kiện đầu tiên → phát 300k (còn 1,2tr), gặp người tiếp theo → phát 300k... cứ thế cho đến khi hết tiền thì `BREAK` thoát khỏi vòng lặp ngay.
+
+**Luồng xử lý tổng quát:**
+
+- **Bước 1.** Khởi tạo `@NganSach = 1.500.000`, `@TienMoiNguoi = 300.000`.
+- **Bước 2.** Khai báo CURSOR lấy danh sách độc giả đủ điều kiện, ưu tiên người mượn nhiều nhất.
+- **Bước 3.** Với mỗi độc giả: kiểm tra ngân sách còn đủ không → có thì cập nhật `TienVoucher` và trừ ngân sách.
+- **Bước 4.** Nếu hết ngân sách thì `BREAK` thoát ngay lập tức — đây là điểm mấu chốt mà Set-based SQL khó thực hiện tự nhiên.
+- **Bước 5.** Đóng và giải phóng CURSOR.
+
+```sql
+DECLARE @NganSach      MONEY        = 1500000;
+DECLARE @TienMoiNguoi  MONEY        = 300000;
+DECLARE @MaKH          INT;
+DECLARE @TenKH         NVARCHAR(150);
+DECLARE @STT           INT          = 1;
+DECLARE @SoLanMuon     INT;
+
+DECLARE cur_Voucher CURSOR FOR
+    SELECT
+        dg.[MaDocGia],
+        dg.[HoTen],
+        COUNT(pm.[MaPhieuMuon]) AS SoLanMuon
+    FROM [DocGia] dg
+    JOIN [PhieuMuon] pm ON dg.[MaDocGia] = pm.[MaDocGia]
+    GROUP BY dg.[MaDocGia], dg.[HoTen]
+    HAVING COUNT(pm.[MaPhieuMuon]) >= 2
+    ORDER BY SoLanMuon DESC;  -- Ưu tiên người mượn nhiều nhất
+
+PRINT N'============================================================';
+PRINT N'          CHƯƠNG TRÌNH PHÂN PHÁT VOUCHER ĐỘC GIẢ           ';
+PRINT N'============================================================';
+PRINT N'  Ngân sách ban đầu : ' + FORMAT(@NganSach,     'N0') + N'đ';
+PRINT N'  Mệnh giá voucher  : ' + FORMAT(@TienMoiNguoi, 'N0') + N'đ';
+PRINT N'  Điều kiện         : Mượn sách >= 2 lần';
+PRINT N'------------------------------------------------------------';
+
+OPEN cur_Voucher;
+FETCH NEXT FROM cur_Voucher INTO @MaKH, @TenKH, @SoLanMuon;
+
+WHILE @@FETCH_STATUS = 0
+BEGIN
+    IF @NganSach >= @TienMoiNguoi
+    BEGIN
+        UPDATE [DocGia]
+        SET    [TienVoucher] = ISNULL([TienVoucher], 0) + @TienMoiNguoi
+        WHERE  [MaDocGia]   = @MaKH;
+
+        SET @NganSach = @NganSach - @TienMoiNguoi;
+
+        PRINT N'[' + CAST(@STT AS NVARCHAR(10)) + N']'
+            + N' ✔  Tặng '      + FORMAT(@TienMoiNguoi, 'N0') + N'đ'
+            + N'  →  '          + @TenKH
+            + N'  (Mượn '       + CAST(@SoLanMuon AS NVARCHAR(10)) + N' lần)'
+            + N'  |  Còn lại: ' + FORMAT(@NganSach, 'N0') + N'đ';
+
+        SET @STT = @STT + 1;
+    END
+    ELSE
+    BEGIN
+        PRINT N'------------------------------------------------------------';
+        PRINT N'  ⚠  Hết ngân sách! Dừng phân phát tại: ' + @TenKH;
+        BREAK;  -- Thoát vòng lặp ngay lập tức
+    END
+
+    FETCH NEXT FROM cur_Voucher INTO @MaKH, @TenKH, @SoLanMuon;
+END;
+
+PRINT N'------------------------------------------------------------';
+PRINT N'  ✔  Hoàn tất. Đã phát voucher cho '
+    + CAST(@STT - 1 AS NVARCHAR(10)) + N' độc giả.';
+PRINT N'  Ngân sách còn dư : ' + FORMAT(@NganSach, 'N0') + N'đ';
+PRINT N'============================================================';
+
+CLOSE     cur_Voucher;
+DEALLOCATE cur_Voucher;
+GO
+```
+
+<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/7ea28fdc-40b0-48ff-a3e6-9267f8d48ffb" />
+
+
+*Tab Messages hiển thị từng dòng thông báo cá nhân hóa: tên người nhận, số tiền, ngân sách còn lại, và dừng đúng lúc khi hết tiền*
+
+---

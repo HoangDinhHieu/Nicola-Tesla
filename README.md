@@ -1117,3 +1117,96 @@ GO
 > Nên ưu tiên sử dụng phương pháp **Set-based** trong hầu hết các trường hợp vì hiệu năng vượt trội. CURSOR chỉ nên dùng khi bài toán bắt buộc xử lý tuần tự từng bản ghi mà Set-based SQL không thể giải quyết được một cách tự nhiên.
 
 ---
+
+### Yêu Cầu 2: Bài Toán Chỉ CURSOR Mới Giải Quyết Được
+
+Các câu lệnh `SELECT`, `UPDATE` truyền thống yêu cầu tên bảng phải là **hằng số cố định**. Chúng không thể tự động thay đổi tên bảng đích dựa theo giá trị dữ liệu trong từng dòng đang xử lý. Đây chính là "đất diễn" độc quyền của CURSOR kết hợp **Dynamic SQL**.
+
+**Ý tưởng (Scenario): "Lưu Trữ (Archive) Lịch Sử Mượn Sách Theo Từng Năm"**
+
+Tình huống: Bảng `PhieuMuon` sau 5 năm hoạt động có hàng nghìn dòng làm hệ thống chậm. Trưởng IT yêu cầu: Hãy duyệt qua bảng `PhieuMuon`, xem có những **Năm** nào tồn tại. Với mỗi Năm, **tự động tạo** một bảng lưu trữ riêng (VD: `PhieuMuon_Archive_2023`, `PhieuMuon_Archive_2024`...) và copy dữ liệu của năm đó sang.
+
+**Tại sao Set-based SQL bó tay?** Không có lệnh `INSERT INTO` thông thường nào có thể tự biến đổi tên bảng đích `[PhieuMuon_Archive_2023]` thành `[PhieuMuon_Archive_2024]` dựa theo giá trị `YEAR()` của từng dòng đang xử lý. Bắt buộc phải dùng CURSOR để lấy từng năm, sau đó xây dựng câu SQL dạng chuỗi (Dynamic SQL) và thực thi bằng `sp_executesql`.
+
+```sql
+DECLARE @Nam        INT;
+DECLARE @TenBangMoi NVARCHAR(100);
+DECLARE @SqlString  NVARCHAR(MAX);
+
+DECLARE cur_Archive CURSOR FOR
+    SELECT DISTINCT YEAR([NgayMuon])
+    FROM [PhieuMuon]
+    WHERE [NgayMuon] IS NOT NULL
+    ORDER BY YEAR([NgayMuon]);
+
+OPEN cur_Archive;
+FETCH NEXT FROM cur_Archive INTO @Nam;
+
+WHILE @@FETCH_STATUS = 0
+BEGIN
+    -- Tạo tên bảng động. VD: PhieuMuon_Archive_2026
+    SET @TenBangMoi = 'PhieuMuon_Archive_' + CAST(@Nam AS VARCHAR);
+
+    -- Xây dựng chuỗi Dynamic SQL
+    SET @SqlString = N'
+        IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = ''' + @TenBangMoi + ''')
+        BEGIN
+            CREATE TABLE [' + @TenBangMoi + '] (
+                [MaPhieuMuon]   INT,
+                [MaDocGia]      INT,
+                [MaSach]        INT,
+                [NgayMuon]      DATE,
+                [NgayTraDuKien] DATE,
+                [TrangThai]     NVARCHAR(20)
+            );
+        END
+
+        INSERT INTO [' + @TenBangMoi + ']
+        SELECT [MaPhieuMuon],[MaDocGia],[MaSach],
+               [NgayMuon],[NgayTraDuKien],[TrangThai]
+        FROM [PhieuMuon]
+        WHERE YEAR([NgayMuon]) = ' + CAST(@Nam AS VARCHAR) + ';
+    ';
+
+    PRINT N'Đang tạo và sao lưu vào bảng: ' + @TenBangMoi;
+    EXEC sp_executesql @SqlString;
+
+    FETCH NEXT FROM cur_Archive INTO @Nam;
+END;
+
+CLOSE cur_Archive;
+DEALLOCATE cur_Archive;
+GO
+```
+
+<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/196fbc5c-6863-4ce6-8cbe-7e0d22ae2ac9" />
+
+*CURSOR duyệt qua từng năm, mỗi lần lặp tự động tạo tên bảng khác nhau và thực thi Dynamic SQL — điều mà SQL set-based hoàn toàn không thể thực hiện*
+
+```sql
+-- Kiểm tra kết quả: xem danh sách bảng Archive đã được tạo
+SELECT [name] AS [TenBangArchive]
+FROM sys.tables
+WHERE [name] LIKE 'PhieuMuon_Archive_%'
+ORDER BY [name];
+```
+
+<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/455002fb-e564-4a83-acda-33d931b06bb5" />
+
+*Kết quả: Các bảng `PhieuMuon_Archive_2026` được tạo tự động theo từng năm thực tế có trong dữ liệu — số lượng bảng và tên bảng hoàn toàn phụ thuộc vào dữ liệu, không thể biết trước khi viết code.*
+
+**Nhận xét:** Đây là trường hợp điển hình CURSOR kết hợp Dynamic SQL là giải pháp duy nhất. Không có cách nào dùng SQL set-based thông thường để tự động tạo tên bảng khác nhau dựa theo từng giá trị dữ liệu trong lúc thực thi.
+
+---
+
+## Tổng Kết
+
+| Phần | Nội dung | Trạng thái |
+|---|---|---|
+| Phần 1 | 5 bảng có quan hệ (PK, FK, CHECK), dữ liệu mẫu đầy đủ | Hoàn thành |
+| Phần 2 | Built-in Function + Scalar + Inline TVF + Multi-statement TVF | Hoàn thành |
+| Phần 3 | System SP + SP kiểm tra logic + SP OUTPUT + SP Result Set | Hoàn thành |
+| Phần 4 | Trigger ghi nhật ký kho + Trigger vòng lặp + Phân tích circular | Hoàn thành |
+| Phần 5 | CURSOR + So sánh hiệu năng + Bài toán CURSOR-only (Dynamic SQL) | Hoàn thành |
+
+

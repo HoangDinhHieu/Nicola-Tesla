@@ -360,4 +360,81 @@ GO
 
 *Tạo Scalar Function `fn_TinhTienPhat` — đóng gói logic tính phạt để tái sử dụng ở nhiều nơi trong hệ thống*
 
+```sql
+-- Khai thác hàm: hiển thị danh sách phiếu mượn kèm tiền phạt
+SELECT
+    pm.[MaPhieuMuon],
+    dg.[HoTen],
+    s.[TenSach],
+    pm.[NgayMuon],
+    pm.[NgayTraDuKien],
+    pm.[NgayTraThucTe],
+    pm.[TrangThai],
+    dbo.[fn_TinhTienPhat](pm.[NgayTraDuKien], pm.[NgayTraThucTe]) AS [TienPhat_VND]
+FROM [PhieuMuon] pm
+JOIN [DocGia] dg ON pm.[MaDocGia] = dg.[MaDocGia]
+JOIN [Sach]   s  ON pm.[MaSach]   = s.[MaSach];
+```
+
+<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/66920946-b61c-4404-84a7-e055bbbd5d06" />
+
+
+*Kết quả: Phiếu đúng hạn hoặc đã trả đúng hạn hiển thị `0.00`, phiếu trả trễ hiển thị số tiền phạt tương ứng. Hàm tự động dùng `GETDATE()` nếu chưa có ngày trả thực tế.*
+
+---
+
+### Viết 1 Inline Table-Valued Function — Tra Cứu Sách Theo Thể Loại
+
+**Ý tưởng (Scenario): "Màn hình tra cứu tự phục vụ của độc giả"**
+
+Tình huống: Thư viện có một màn hình tra cứu tự phục vụ. Độc giả chọn thể loại muốn đọc và hệ thống trả về danh sách sách còn trong kho. Yêu cầu là phải lọc được theo từng thể loại khác nhau tùy theo lựa chọn — đây là điểm mà View thông thường không đáp ứng được (View không nhận tham số), nên cần dùng **Inline TVF**.
+
+**Luồng xử lý tổng quát:**
+
+- **Bước 1.** Hàm nhận vào `@MaTheLoai` làm tham số đầu vào.
+- **Bước 2.** Thực hiện JOIN bảng `Sach` với bảng `TheLoai` để lấy tên thể loại.
+- **Bước 3.** Lọc theo `@MaTheLoai` truyền vào **và** điều kiện `SoLuongTon > 0` (chỉ lấy sách còn hàng).
+- **Bước 4.** Trả về bảng kết quả ngay lập tức (không qua biến bảng trung gian).
+
+```sql
+CREATE FUNCTION [dbo].[fn_GetSachTheoTheLoai]
+(
+    @MaTheLoai INT
+)
+RETURNS TABLE
+AS
+RETURN
+(
+    SELECT
+        s.[MaSach],
+        s.[TenSach],
+        s.[TacGia],
+        s.[NamXuatBan],
+        s.[GiaBan],
+        s.[SoLuongTon],
+        tl.[TenTheLoai]
+    FROM [Sach] s
+    JOIN [TheLoai] tl ON s.[MaTheLoai] = tl.[MaTheLoai]
+    WHERE s.[MaTheLoai] = @MaTheLoai
+      AND s.[SoLuongTon] > 0
+);
+GO
+```
+
+<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/4150ec64-3b5d-4abc-9e92-7e47bdc73d39" />
+
+
+*Tạo Inline TVF `fn_GetSachTheoTheLoai` — hoạt động như một View có tham số, SQL Server có thể tối ưu hóa (inline) nó vào truy vấn cha hiệu quả hơn Multi-statement TVF*
+
+```sql
+-- Khai thác: xem sách thể loại "Khoa học kỹ thuật" (MaTheLoai = 2) còn trong kho
+SELECT * FROM dbo.[fn_GetSachTheoTheLoai](2);
+```
+
+<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/28acb18b-8807-43ec-8c1c-ddad1224a54a" />
+
+
+*Kết quả trả về danh sách sách thể loại "Khoa học kỹ thuật" còn tồn kho, sẵn sàng cho mượn*
+
+---
 

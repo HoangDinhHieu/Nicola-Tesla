@@ -651,3 +651,66 @@ EXEC [dbo].[sp_MuonSach] @MaDocGia=2, @MaSach=7,
 *Lần gọi đầu in ra " Đăng ký mượn sách thành công!". Lần gọi thứ hai báo lỗi rõ ràng: "Không đủ sách! Hiện chỉ còn 2 cuốn trong kho." — thân thiện hơn nhiều so với lỗi SQL thô.*
 
 ---
+
+### Viết 01 Stored Procedure Có Tham Số OUTPUT — Tra Soát Công Nợ Độc Giả
+
+**Ý tưởng (Scenario): "Tra soát nợ nhanh tại quầy trả sách"**
+
+Tình huống: Khi độc giả đến trả sách, thủ thư cần biết ngay: khách này đang nợ bao nhiêu tiền phạt và có mấy phiếu đang quá hạn. Kết quả này không cần hiển thị dạng bảng — nó sẽ được phần mềm (C#, Java...) đọc về để hiển thị lên UI hoặc in hóa đơn. Tham số `OUTPUT` là lựa chọn phù hợp nhất cho trường hợp này.
+
+**Luồng xử lý tổng quát:**
+
+- **Bước 1.** SP nhận vào `@MaDocGia` và 2 biến `OUTPUT`: `@TongTienPhat`, `@SoPhieuQuaHan`.
+- **Bước 2.** Dùng 1 câu `SELECT` tổng hợp: tính tổng tiền phạt (gọi hàm `fn_TinhTienPhat`) và đếm số phiếu quá hạn (dùng `CASE WHEN`).
+- **Bước 3.** Gán kết quả vào 2 biến `OUTPUT`.
+- **Bước 4.** Xử lý trường hợp độc giả không có phiếu nào bằng `ISNULL(..., 0)`.
+
+```sql
+CREATE PROCEDURE [dbo].[sp_TinhCongNoDocGia]
+    @MaDocGia       INT,
+    @TongTienPhat   MONEY OUTPUT,
+    @SoPhieuQuaHan  INT   OUTPUT
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    SELECT
+        @TongTienPhat  = SUM(dbo.[fn_TinhTienPhat]([NgayTraDuKien],[NgayTraThucTe])),
+        @SoPhieuQuaHan = COUNT(CASE
+                            WHEN ISNULL([NgayTraThucTe], GETDATE()) > [NgayTraDuKien]
+                            THEN 1 END)
+    FROM [PhieuMuon]
+    WHERE [MaDocGia] = @MaDocGia;
+
+    SET @TongTienPhat  = ISNULL(@TongTienPhat, 0);
+    SET @SoPhieuQuaHan = ISNULL(@SoPhieuQuaHan, 0);
+END;
+GO
+```
+
+<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/abc24576-1d1b-45fd-8ef7-76f058500434" />
+
+*Tạo Stored Procedure `sp_TinhCongNoDocGia` — dùng tham số OUTPUT để trả về nhiều giá trị mà không cần SELECT dạng bảng*
+
+```sql
+-- Khai thác SP với OUTPUT
+DECLARE @Tien MONEY, @SoPhieu INT;
+EXEC [dbo].[sp_TinhCongNoDocGia]
+    @MaDocGia = 4,
+    @TongTienPhat  = @Tien    OUTPUT,
+    @SoPhieuQuaHan = @SoPhieu OUTPUT;
+
+SELECT
+    dg.[HoTen]      AS [TenDocGia],          
+    @SoPhieu        AS [SoPhieuQuaHan],
+    @Tien           AS [TongTienPhat_VND],
+    FORMAT(@Tien, 'N0') + N' đồng' AS [TongTienPhat_ChuSo]
+FROM [DocGia] dg
+WHERE dg.[MaDocGia] = 4;                     
+```
+
+<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/1ec36fce-5065-44e7-9596-da9688ae123c" />
+
+*Tham số OUTPUT cho phép SP trả về nhiều giá trị cùng lúc. Ảnh hiển thị độc giả Phạm Minh Tuấn đang có công nợ tiền phạt — thông tin này được phần mềm đọc về để hiển thị trên giao diện người dùng.*
+
+---
